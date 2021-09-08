@@ -1,98 +1,128 @@
+// llamar al inicio para que este disponible
+// en todos los archivos
+require('dotenv').config()
+// puede ser el require directamente
+require('./mongoconfig.js')
 const express = require('express')
+// usando sentry
+const Sentry = require('@sentry/node')
+const Tracing = require('@sentry/tracing')
+
 // CORS
 const cors = require('cors')
 const logger = require('./middlewares/Loger')
 const app = express()
+// importamos los middlewares
+const notFound = require('./middlewares/notFound')
+const handleError = require('./middlewares/handleError')
+// llamamos al modelo
+const Note = require('./Model/Note')
 // para tener acceso al body del request
 app.use(cors())
 app.use(express.json())
+// servir estáticos
+// lo que hace es servir los estaticos
+// de esa carpeta como rutas
+app.use('/images', express.static('img'))
 // MIDLEWARE
 // es una funcion que intercepta nuestra api
 app.use(logger)
 
-let notes = [
-  {
-    id: 1,
-    content: 'HTML is easy only if yor understand concepts very well',
-    date: '2019-05-30T17:30:31.098Z',
-    important: true
-  },
-  {
-    id: 2,
-    content: 'Browser can execute only JavaScript',
-    date: '2019-05-30T18:39:34.091Z',
-    important: false
-  },
-  {
-    id: 3,
-    content: 'GET and POST are the most important methods of HTTP protocol',
-    date: '2019-05-30T19:20:14.298Z',
-    important: true
-  }
-]
+Sentry.init({
+  dsn: 'https://cdc01793fc0942dc8a32f08b55f63673@o992480.ingest.sentry.io/5950004',
+  integrations: [
+    // enable HTTP calls tracing
+    new Sentry.Integrations.Http({ tracing: true }),
+    // enable Express.js middleware tracing
+    new Tracing.Integrations.Express({ app })
+  ],
+
+  // Set tracesSampleRate to 1.0 to capture 100%
+  // of transactions for performance monitoring.
+  // We recommend adjusting this value in production
+  tracesSampleRate: 1.0
+})
+// RequestHandler creates a separate execution context using domains, so that every
+// transaction/span/breadcrumb is attached to its own Hub instance
+app.use(Sentry.Handlers.requestHandler())
+// TracingHandler creates a trace for every incoming request
+app.use(Sentry.Handlers.tracingHandler())
+
 app.get('/', (req, res) => {
   res.send('<h1>Hello world</h1>')
 })
 // get all notes
-app.get('/api/notes', (req, res) => {
-  res.json(notes)
+app.get('/api/notes', (req, res, next) => {
+  Note.find({}).then(notes => {
+    res.json(notes)
+  }
+  ).catch(error => next(error))
 })
 // get notes by id
-app.get('/api/notes/:id', (req, res) => {
-  const id = Number(req.params.id)
-  const note = notes.find(nota => nota.id === id)
-  if (!note) {
-    res.status(404).send({
-      message: 'Nota no existente'
-    })
-  }
-  res.send(note)
-})
-// delete one note
-app.delete('/api/notes/:id', (req, res) => {
-  const id = Number(req.params.id)
-  notes = notes.filter(nota => nota.id !== id)
-  res.status(204).end()
-})
-/// create one note
-app.post('/api/notes', (req, res) => {
-  const newNote = req.body
-  // validando un poco
-  if (!newNote || !newNote.content) {
-    return res.status(400).json({ error: 'content mising' })
-  }
-  const newId = Math.max(...notes.map(note => note.id))
-  const noteToCreate = {
-    id: newId + 1,
-    content: newNote.content,
-    date: new Date().toISOString(),
-    important: newNote.important || false
-  }
-  notes = [...notes, noteToCreate]
-  res.status(201).json(noteToCreate)
-})
-app.put('/api/notes/:id', (req, res) => {
-  const id = Number(req.params.id)
-  const newNote = req.body
-  // validando un poco
-  if (!newNote || !newNote.content) {
-    return res.status(400).json({ error: 'content mising' })
-  }
-  const noteToCreate = {
-    id: id,
-    content: newNote.content,
-    date: new Date().toISOString(),
-    important: newNote.important || false
-  }
-  notes = notes.map(nota => nota.id === id ? noteToCreate : nota)
-  res.status(202).json(noteToCreate)
-})
-app.use((req, res) => {
-  res.status(404).json({
-    error: 'page not found'
+app.get('/api/notes/:id', (req, res, next) => {
+  const { id } = req.params
+  Note.findById(id).then(
+    note => {
+      if (note) {
+        return res.json(note)
+      }
+      res.status(404).end()
+    }
+  ).catch(error => {
+    next(error)
   })
 })
-const PORT = process.env.PORT || 3001
+// delete one note
+app.delete('/api/notes/:id', (req, res, next) => {
+  const { id } = req.params
+  Note.findByIdAndDelete(id).then(result => {
+    res.status(204).send({
+      message: 'nota eliminada'
+    })
+  })
+    .catch(error => next(error))
+})
+/// create one note
+app.post('/api/notes', (req, res, next) => {
+  const newNote = req.body
+  // validando un poco
+  if (!newNote || !newNote.content) {
+    return res.status(400).json({ error: 'content mising' })
+  }
+  // const newId = Math.max(...notes.map(note => note.id))
+  const newNoteToCreate = new Note({
+    content: newNote.content,
+    date: new Date().toISOString(),
+    important: newNote.important || false
+  })
+  newNoteToCreate.save().then(
+    savedNote => {
+      res.status(201).json(savedNote)
+    }
+  ).catch(error => next(error))
+})
+app.put('/api/notes/:id', (req, res, next) => {
+  const { id } = req.params
+  const newNote = req.body
+  const noteUpdated = {
+    content: newNote.content,
+    date: new Date().toISOString(),
+    important: newNote.important || false
+  }
+  Note.findByIdAndUpdate(id, noteUpdated, { new: true })
+    .then(result => {
+      res.status(200).json(result)
+    }).catch(error => next(error))
+})
+
+app.use(notFound)
+
+app.use(Sentry.Handlers.errorHandler())
+
+// el orden de los middlewares es muy importante
+app.use(handleError)
+
+const PORT = process.env.PORT
 app.listen(PORT, () => {
   console.log(`SERVER RUNNING ON PORT ${PORT}`)
 })
